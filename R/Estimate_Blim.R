@@ -120,14 +120,30 @@ flat_rec <- function(x, narrow_threshold, doplot, ...){
 ##' @param ... extra arguments for internal functions.
 ##' @details The function estimates Blim according to the different stock types in ICES (2021, https://doi.org/10.17895/ices.advice.7891).
 ##' If \code{is.spasmodic=TRUE}, stock type 1, Blim is estimated as the lowest SSB, where large recruitment (probability \code{>spasmodic_prob}) is observed, default is \code{FALSE}. Stock type 1 will only be considered if turning this argument to \code{TRUE}.
-##' By default, the function first estimates Blim as the inflection point of a hockey-stick stock-recruitment (SRR) curve (stock type 2). If a consistent SRR cannot be estimated of if the inflection point is below the minimum SSB, the stock type is considered to be different than type 2.
+##' By default, the function first estimates Blim as the inflection point of a hockey-stick stock-recruitment (SRR) curve (stock type 2). If a consistent SRR cannot be estimated or if the inflection point is outside the range of observed SSB, the stock type is considered to be either 5 or 6 if the inflexion point is below the minimum SSB, or type 3 if above.
 ##' To determine which type is the stock between types 3 to 6, an unconstrained linear regression is fitted to S-R pairs and the slope indicates which type the stock is between 3, 4, 5, and 6 and Blim is estimated accordingly to ICES (2021). 
 ##' If \code{types!=2}, any types between 3 and 6 can be considered to estimate Blim and the best type will be chosen depending on the results of the linear regression.
 ##' If the slope of the linear regression is not different than zero (confidence interval given \code{conf_level_lm} contains zero), the SRR is considered to be flat (types 5 or 6). If the slope is positive then the type 3 is assumed and type 4 otherwise.                                         
 ##' @return Blim and stock type code as attribute.
 ##' @author Vanessa Trijoulet
+Blim_estim <- function (data, ...){
+  UseMethod("Blim_estim")
+}
 
-Blim_estim <- function(R, S, Rage, years=names(R), is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+##' @rdname Blim_estim
+##' @method Blim_estim default
+##' @export
+Blim_estim.default <- function(data, Rage, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+  
+  if (sum(colnames(data) %in% c("Rec", "SSB")) != 2) stop("The column names of data should be 'Rec' and 'SSB'")
+
+  R <- as.numeric(data[, "Rec"])
+  S <- as.numeric(data[, "SSB"])
+  years <- as.numeric(rownames(data))
+  names(R) <- years
+  names(S) <- years
+  
+  if (missing(Rage)) stop("The argument Rage (recruitment age) is missing")
   
   if (sum(types==1)>0) cat("Type 1 can only be considered by setting is.spasmodic=TRUE. Only the types 3-6 will be considered", sep="\n")
   
@@ -161,15 +177,228 @@ Blim_estim <- function(R, S, Rage, years=names(R), is.spasmodic=FALSE, types=2:6
       # Try fit HS SRR
       SRR <- HS_fit(y, x, years, doplot, ...)
       if (SRR["convergence_code"]==0){
-        if (exp(SRR["logBlim"])>min(x)){ # Type 2 # could also use S instead of x!!!!
-          message <- "Type 2, Blim is the inflection point of the hockey-stick curve"
+        if (exp(SRR["logBlim"])>min(x)){ 
+          if (exp(SRR["logBlim"])>max(x)){ # Type 3 
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 2 # could also use S instead of x!!!!
+            message <- "Type 2, Blim is the inflection point of the hockey-stick curve"
+            cat(message)
+            cat("\n")
+            res <- exp(SRR["logBlim"])
+            names(res) <- "Blim"
+            attr(res, "code") <- message
+            if(doplot) abline(v=res, lty=2, lwd=2)
+            return (res)
+          }
+        } else { # Recruitment is flat, Type 5 or 6
+          flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+        }
+      } else {
+        message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data"
+        cat(message)
+        res <- NA
+        attr(res, "code") <- message
+        return(res)
+      }
+    } else { # Fit a linear regression without constraint on intercept (for Types 3-6)
+      res_lm <- lm_fn(y, x, years, doplot, ...)
+      CI_slope <- confint(res_lm, level = conf_level_lm)["x",]
+      if (CI_slope[1]<=0 & CI_slope[2]>=0){ # Recruitment is flat, Type 5 or 6
+        flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+      } else {
+        if (CI_slope[1]>=0){ # Type 3
+          message <- "Type 3, Blim may be close to the highest SSB observed"
           cat(message)
           cat("\n")
-          res <- exp(SRR["logBlim"])
-          names(res) <- "Blim"
+          res <- max(x) # could also use S instead of x!!!!
+          names(res) <- "max(SSB)"
           attr(res, "code") <- message
-          if(doplot) abline(v=res, lty=2, lwd=2)
-          return (res)
+          if (doplot) abline(v=res, lty=2, lwd=2)
+          return(res)
+        } else { # Type 4
+          message <- "Type 4, No Blim from this data, only the PA reference point"
+          cat(message)
+          cat("\n")
+          res <- NA
+          attr(res, "code") <- message
+          return(res)
+        }
+      }
+    }
+  }
+}
+
+
+
+##' @rdname Blim_estim
+##' @method Blim_estim sam
+##' @export
+Blim_estim.sam <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+  
+  R <- rectable(data)[, "Estimate"]
+  S <- ssbtable(data)[, "Estimate"]
+  Rage <- data$conf$minAge
+  years <- as.numeric(rownames(rectable(data)))
+  
+  if (sum(types==1)>0) cat("Type 1 can only be considered by setting is.spasmodic=TRUE. Only the types 3-6 will be considered", sep="\n")
+  
+  if (Rage>0) {
+    y=R[as.character(years[-(1:Rage)])]
+    x=S[as.character(years[-((length(years)-(Rage-1)):length(years))])]
+  } else {
+    y=R[as.character(years)]
+    x=S[as.character(years)]
+  }
+  
+  if (is.spasmodic){ # Type 1
+    threshold <- quantile(y, probs=spasmodic_prob)
+    outlier_idx <- which(y>=threshold)
+    res <- min(x[outlier_idx]) # could also use S instead of x!!!!
+    names(res) <- "Blim"
+    if (doplot){
+      plot(y=y, x=x, type="l", col="red", ylim=c(0, max(y)*1.1), xlim=c(0, max(x)*1.1), xlab="SSB", ylab="Recruitment", ...)
+      text(x, y, labels = names(x), cex = 0.7, col = "red")
+      #plot(y=y, x=x, pch=16, type="o", col="red", ylim=c(0, max(y)*1.1), xlim=c(0, max(x)*1.1), xlab="SSB", ylab="Recruitment", ...)
+      abline(h=threshold, lty=2, col="grey")
+      abline(v=res, lty=2, lwd=2)
+    }
+    message <- "Type 1, Blim is based on the lowest SSB, where large recruitment is observed"
+    attr(res, "code") <- message
+    cat(message)
+    cat("\n")
+    return (res)
+  } else {
+    if (2 %in% types){  # Only if we want to fit a HS SRR
+      # Try fit HS SRR
+      SRR <- HS_fit(y, x, years, doplot, ...)
+      if (SRR["convergence_code"]==0){
+        if (exp(SRR["logBlim"])>min(x)){ 
+          if (exp(SRR["logBlim"])>max(x)){ # Type 3 
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 2 # could also use S instead of x!!!!
+            message <- "Type 2, Blim is the inflection point of the hockey-stick curve"
+            cat(message)
+            cat("\n")
+            res <- exp(SRR["logBlim"])
+            names(res) <- "Blim"
+            attr(res, "code") <- message
+            if(doplot) abline(v=res, lty=2, lwd=2)
+            return (res)
+          }
+        } else { # Recruitment is flat, Type 5 or 6
+          flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+        }
+      } else {
+        message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data"
+        cat(message)
+        res <- NA
+        attr(res, "code") <- message
+        return(res)
+      }
+    } else { # Fit a linear regression without constraint on intercept (for Types 3-6)
+      res_lm <- lm_fn(y, x, years, doplot, ...)
+      CI_slope <- confint(res_lm, level = conf_level_lm)["x",]
+      if (CI_slope[1]<=0 & CI_slope[2]>=0){ # Recruitment is flat, Type 5 or 6
+        flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+      } else {
+        if (CI_slope[1]>=0){ # Type 3
+          message <- "Type 3, Blim may be close to the highest SSB observed"
+          cat(message)
+          cat("\n")
+          res <- max(x) # could also use S instead of x!!!!
+          names(res) <- "max(SSB)"
+          attr(res, "code") <- message
+          if (doplot) abline(v=res, lty=2, lwd=2)
+          return(res)
+        } else { # Type 4
+          message <- "Type 4, No Blim from this data, only the PA reference point"
+          cat(message)
+          cat("\n")
+          res <- NA
+          attr(res, "code") <- message
+          return(res)
+        }
+      }
+    }
+  }
+}
+
+##' @rdname Blim_estim
+##' @method Blim_estim FLStock
+##' @export
+Blim_estim.FLStock <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+  
+  R <- rec(stk)[drop=TRUE]
+  S <- ssb(stk)[drop=TRUE]
+  years <- as.numeric(names(R))
+  Rage <- as.numeric(rownames(rec(stk)))
+  
+  if (sum(types==1)>0) cat("Type 1 can only be considered by setting is.spasmodic=TRUE. Only the types 3-6 will be considered", sep="\n")
+  
+  if (Rage>0) {
+    y=R[as.character(years[-(1:Rage)])]
+    x=S[as.character(years[-((length(years)-(Rage-1)):length(years))])]
+  } else {
+    y=R[as.character(years)]
+    x=S[as.character(years)]
+  }
+  
+  if (is.spasmodic){ # Type 1
+    threshold <- quantile(y, probs=spasmodic_prob)
+    outlier_idx <- which(y>=threshold)
+    res <- min(x[outlier_idx]) # could also use S instead of x!!!!
+    names(res) <- "Blim"
+    if (doplot){
+      plot(y=y, x=x, type="l", col="red", ylim=c(0, max(y)*1.1), xlim=c(0, max(x)*1.1), xlab="SSB", ylab="Recruitment", ...)
+      text(x, y, labels = names(x), cex = 0.7, col = "red")
+      #plot(y=y, x=x, pch=16, type="o", col="red", ylim=c(0, max(y)*1.1), xlim=c(0, max(x)*1.1), xlab="SSB", ylab="Recruitment", ...)
+      abline(h=threshold, lty=2, col="grey")
+      abline(v=res, lty=2, lwd=2)
+    }
+    message <- "Type 1, Blim is based on the lowest SSB, where large recruitment is observed"
+    attr(res, "code") <- message
+    cat(message)
+    cat("\n")
+    return (res)
+  } else {
+    if (2 %in% types){  # Only if we want to fit a HS SRR
+      # Try fit HS SRR
+      SRR <- HS_fit(y, x, years, doplot, ...)
+      if (SRR["convergence_code"]==0){
+        if (exp(SRR["logBlim"])>min(x)){ 
+          if (exp(SRR["logBlim"])>max(x)){ # Type 3 
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 2 # could also use S instead of x!!!!
+            message <- "Type 2, Blim is the inflection point of the hockey-stick curve"
+            cat(message)
+            cat("\n")
+            res <- exp(SRR["logBlim"])
+            names(res) <- "Blim"
+            attr(res, "code") <- message
+            if(doplot) abline(v=res, lty=2, lwd=2)
+            return (res)
+          }
         } else { # Recruitment is flat, Type 5 or 6
           flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
         }

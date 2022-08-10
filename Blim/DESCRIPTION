@@ -1,0 +1,10 @@
+Package: Blim
+Type: Package
+Title: Estimation of Blim for ICES stocks
+Version: 1.0
+Date: 2022-08-09
+Author:Vanessa Trijoulet, vtri@aqua.dtu.dk
+Description: Estimation of Blim for ICES stocks following ICES 2021 guidelines (https://doi.org/10.17895/ices.advice.7891)
+License: GPL-2
+RoxygenNote: 7.2.0
+Encoding: UTF-8

@@ -106,11 +106,10 @@ flat_rec <- function(x, narrow_threshold, doplot, ...){
 }
 
 
-##' Blim_estim function to estimate Blim given a time series of recruitment and SSB
-##' @param R vector of recruitment values named after the assessment years.
-##' @param S vector of SSB values values named after the assessment years.
-##' @param Rage age at recruitment to correctly identify R-S pairs.
-##' @param years the years to consider for the R-S pairs, default is the whole time series.
+##' Function to estimate Blim given a time series of recruitment and SSB
+##' @param data SAM fit, FLStock object, or data frame with columns "Rec" and "SSB" and with years as row names.
+##' @param Rage age at recruitment to correctly identify SSB-Rec pairs, only needed if data is a data frame.
+##' @param years the years to consider for the SSB-Rec pairs, default is the whole time series.
 ##' @param is.spasmodic \code{TRUE} if the stock is assumed to have spasmodic recruitment, default is \code{FALSE}.
 ##' @param types stock types to consider for Blim estimation, default are types 2 to 6 in ICES (2021). 
 ##' @param doplot if TRUE, the final stock-recruitment plot will be drawn during estimation, default is \code{FALSE}.
@@ -118,14 +117,37 @@ flat_rec <- function(x, narrow_threshold, doplot, ...){
 ##' @param narrow_treshold threshold to determine if the range of SSB is narrow or not (difference between stock types 5 and 6), default is 0.25. The range of SSB is considered narrow if less than \code{narrow_threshold} of SSB is below max(SSB)/2.
 ##' @param conf_level_lm confidence level of the confidence interval of the slope parameter of the linear regression (types 3 to 6), default is 0.95.
 ##' @param ... extra arguments for internal functions.
-##' @details The function estimates Blim according to the different stock types in ICES (2021, https://doi.org/10.17895/ices.advice.7891).
-##' If \code{is.spasmodic=TRUE}, stock type 1, Blim is estimated as the lowest SSB, where large recruitment (probability \code{>spasmodic_prob}) is observed, default is \code{FALSE}. Stock type 1 will only be considered if turning this argument to \code{TRUE}.
-##' By default, the function first estimates Blim as the inflection point of a hockey-stick stock-recruitment (SRR) curve (stock type 2). If a consistent SRR cannot be estimated or if the inflection point is outside the range of observed SSB, the stock type is considered to be either 5 or 6 if the inflexion point is below the minimum SSB, or type 3 if above.
-##' To determine which type is the stock between types 3 to 6, an unconstrained linear regression is fitted to S-R pairs and the slope indicates which type the stock is between 3, 4, 5, and 6 and Blim is estimated accordingly to ICES (2021). 
-##' If \code{types!=2}, any types between 3 and 6 can be considered to estimate Blim and the best type will be chosen depending on the results of the linear regression.
-##' If the slope of the linear regression is not different than zero (confidence interval given \code{conf_level_lm} contains zero), the SRR is considered to be flat (types 5 or 6). If the slope is positive then the type 3 is assumed and type 4 otherwise.                                         
+##' @details The function estimates Blim according to the different stock types in ICES (2021, \url{https://doi.org/10.17895/ices.advice.7891}).
+##' If \code{is.spasmodic=TRUE}, stock type 1, Blim is estimated as the lowest SSB, where large recruitment (probability \code{>=spasmodic_prob}) is observed, default is \code{FALSE}. Stock type 1 will only be considered if the argument is \code{TRUE}. \cr
+##' \cr 
+##' By default, the function will estimate Blim according to the stock types 2-6.
+##' First, the function tries to estimate Blim as the inflection point of a hockey-stick stock-recruitment (SRR) curve (stock type 2). 
+##' If the inflection point is outside the range of observed SSB, the stock type is considered to be either 5 or 6 if the inflection point 
+##' is below the minimum SSB, or type 3 if above. 
+##' If a consistent SRR cannot be estimated (non convergence), Blim will be estimated according to types 3-6 as explained below. \cr
+##' \cr
+##' To determine which type is the best between types 3-6, an unconstrained linear regression is fitted to the SSB-Rec pairs.
+##' The slope indicates which type the stock is and Blim is estimated accordingly to ICES (2021).
+##' If the slope of the linear regression is not different from zero (confidence interval given \code{conf_level_lm} contains zero), 
+##' the SRR is considered to be flat (types 5 or 6) and the final type is chosen depending on the range of SSB values (narrow or not). If the slope is positive, the type 3 is assumed and the type 4 is assumed otherwise.                                         
+##' \cr
+##' It is possible to avoid fitting a hockey-stick SRR by using \code{types!=2}. In this case, any stock type between 3 and 6 can be considered to estimate Blim. 
 ##' @return Blim and stock type code as attribute.
 ##' @author Vanessa Trijoulet
+##' @examples
+##' s <- seq(100, 2000, length=50)
+##' r <- exp((2+log(s)-0.001*s)+rnorm(length(s)))
+##' data <- data.frame(Rec=r, SSB=s, row.names=1971:2020)
+##' 
+##' # The stock has spasmodic recruitment (type 1):
+##' Blim_estim(data, Rage=0, is.spasmodic=TRUE, doplot=TRUE) # only type 1 is assumed
+##' 
+##' # The algorithm tests for ICES stock types 2-6 and chooses the best:
+##' Blim_estim(data, Rage=0, doplot=TRUE) 
+##' 
+##' # Type 2 is not considered and the algorithm only tests for types 3-6:
+##' Blim_estim(data, Rage=0, types=3:6, doplot=TRUE) 
+
 Blim_estim <- function (data, ...){
   UseMethod("Blim_estim")
 }
@@ -133,15 +155,14 @@ Blim_estim <- function (data, ...){
 ##' @rdname Blim_estim
 ##' @method Blim_estim default
 ##' @export
-Blim_estim.default <- function(data, Rage, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+Blim_estim.default <- function(data, Rage, years=as.numeric(rownames(data)), is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
   
   if (sum(colnames(data) %in% c("Rec", "SSB")) != 2) stop("The column names of data should be 'Rec' and 'SSB'")
 
   R <- as.numeric(data[, "Rec"])
   S <- as.numeric(data[, "SSB"])
-  years <- as.numeric(rownames(data))
-  names(R) <- years
-  names(S) <- years
+  names(R) <- as.numeric(rownames(data))
+  names(S) <- as.numeric(rownames(data))
   
   if (missing(Rage)) stop("The argument Rage (recruitment age) is missing")
   
@@ -201,11 +222,36 @@ Blim_estim.default <- function(data, Rage, is.spasmodic=FALSE, types=2:6, doplot
           flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
         }
       } else {
-        message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data"
-        cat(message)
-        res <- NA
-        attr(res, "code") <- message
-        return(res)
+        # message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data, try the other types"
+        # cat(message)
+        # res <- NA
+        # attr(res, "code") <- message
+        # return(res)
+        
+        # Fit a linear regression without constraint on intercept (for Types 3-6)
+        res_lm <- lm_fn(y, x, years, doplot, ...)
+        CI_slope <- confint(res_lm, level = conf_level_lm)["x",]
+        if (CI_slope[1]<=0 & CI_slope[2]>=0){ # Recruitment is flat, Type 5 or 6
+          flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+        } else {
+          if (CI_slope[1]>=0){ # Type 3
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 4
+            message <- "Type 4, No Blim from this data, only the PA reference point"
+            cat(message)
+            cat("\n")
+            res <- NA
+            attr(res, "code") <- message
+            return(res)
+          }
+        }
       }
     } else { # Fit a linear regression without constraint on intercept (for Types 3-6)
       res_lm <- lm_fn(y, x, years, doplot, ...)
@@ -240,13 +286,12 @@ Blim_estim.default <- function(data, Rage, is.spasmodic=FALSE, types=2:6, doplot
 ##' @rdname Blim_estim
 ##' @method Blim_estim sam
 ##' @export
-Blim_estim.sam <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+Blim_estim.sam <- function(data, years=as.numeric(rownames(rectable(data))), is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
   
   R <- rectable(data)[, "Estimate"]
   S <- ssbtable(data)[, "Estimate"]
   Rage <- data$conf$minAge
-  years <- as.numeric(rownames(rectable(data)))
-  
+
   if (sum(types==1)>0) cat("Type 1 can only be considered by setting is.spasmodic=TRUE. Only the types 3-6 will be considered", sep="\n")
   
   if (Rage>0) {
@@ -303,11 +348,36 @@ Blim_estim.sam <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, sp
           flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
         }
       } else {
-        message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data"
-        cat(message)
-        res <- NA
-        attr(res, "code") <- message
-        return(res)
+        # message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data, try the other types"
+        # cat(message)
+        # res <- NA
+        # attr(res, "code") <- message
+        # return(res)
+        
+        # Fit a linear regression without constraint on intercept (for Types 3-6)
+        res_lm <- lm_fn(y, x, years, doplot, ...)
+        CI_slope <- confint(res_lm, level = conf_level_lm)["x",]
+        if (CI_slope[1]<=0 & CI_slope[2]>=0){ # Recruitment is flat, Type 5 or 6
+          flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+        } else {
+          if (CI_slope[1]>=0){ # Type 3
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 4
+            message <- "Type 4, No Blim from this data, only the PA reference point"
+            cat(message)
+            cat("\n")
+            res <- NA
+            attr(res, "code") <- message
+            return(res)
+          }
+        }
       }
     } else { # Fit a linear regression without constraint on intercept (for Types 3-6)
       res_lm <- lm_fn(y, x, years, doplot, ...)
@@ -340,12 +410,11 @@ Blim_estim.sam <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, sp
 ##' @rdname Blim_estim
 ##' @method Blim_estim FLStock
 ##' @export
-Blim_estim.FLStock <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
-  
-  R <- rec(stk)[drop=TRUE]
-  S <- ssb(stk)[drop=TRUE]
-  years <- as.numeric(names(R))
-  Rage <- as.numeric(rownames(rec(stk)))
+Blim_estim.FLStock <- function(data, years=as.numeric(names(rec(data)[drop=TRUE])), is.spasmodic=FALSE, types=2:6, doplot=FALSE, spasmodic_prob=0.9, narrow_threshold=0.25, conf_level_lm=0.95, ...){
+
+  R <- rec(data)[drop=TRUE]
+  S <- ssb(data)[drop=TRUE]
+  Rage <- as.numeric(rownames(rec(data)))
   
   if (sum(types==1)>0) cat("Type 1 can only be considered by setting is.spasmodic=TRUE. Only the types 3-6 will be considered", sep="\n")
   
@@ -403,11 +472,36 @@ Blim_estim.FLStock <- function(data, is.spasmodic=FALSE, types=2:6, doplot=FALSE
           flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
         }
       } else {
-        message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data"
-        cat(message)
-        res <- NA
-        attr(res, "code") <- message
-        return(res)
+        # message <- "It is not possible to fit a consistent hockey-stick stock recruitment relationship to the data, try the other types"
+        # cat(message)
+        # res <- NA
+        # attr(res, "code") <- message
+        # return(res)
+        
+        # Fit a linear regression without constraint on intercept (for Types 3-6)
+        res_lm <- lm_fn(y, x, years, doplot, ...)
+        CI_slope <- confint(res_lm, level = conf_level_lm)["x",]
+        if (CI_slope[1]<=0 & CI_slope[2]>=0){ # Recruitment is flat, Type 5 or 6
+          flat_rec(x, narrow_threshold, doplot, ...) # could also use S instead of x!!!!
+        } else {
+          if (CI_slope[1]>=0){ # Type 3
+            message <- "Type 3, Blim may be close to the highest SSB observed"
+            cat(message)
+            cat("\n")
+            res <- max(x) # could also use S instead of x!!!!
+            names(res) <- "max(SSB)"
+            attr(res, "code") <- message
+            if (doplot) abline(v=res, lty=2, lwd=2)
+            return(res)
+          } else { # Type 4
+            message <- "Type 4, No Blim from this data, only the PA reference point"
+            cat(message)
+            cat("\n")
+            res <- NA
+            attr(res, "code") <- message
+            return(res)
+          }
+        }
       }
     } else { # Fit a linear regression without constraint on intercept (for Types 3-6)
       res_lm <- lm_fn(y, x, years, doplot, ...)

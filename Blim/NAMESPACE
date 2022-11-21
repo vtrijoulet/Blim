@@ -3,3 +3,4 @@
 S3method(Blim_estim,FLStock)
 S3method(Blim_estim,default)
 S3method(Blim_estim,sam)
+export(Blim_estim)

@@ -147,7 +147,7 @@ flat_rec <- function(x, narrow_threshold, doplot, ...){
 ##' 
 ##' # Type 2 is not considered and the algorithm only tests for types 3-6:
 ##' Blim_estim(data, Rage=0, types=3:6, doplot=TRUE) 
-
+##' @export
 Blim_estim <- function (data, ...){
   UseMethod("Blim_estim")
 }

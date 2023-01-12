@@ -5,7 +5,7 @@ Estimation of Blim for ICES stocks following guidelines from ICES 2021 (https://
 Can be installed by typing: 
 
 ```R
-devtools::install_github("https://github.com/vtrijoulet/Blim/Blim")
+devtools::install_github("vtrijoulet/Blim/Blim")
 ```
 
 ## Example
